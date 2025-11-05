@@ -48,3 +48,27 @@ func parseBoostHours(scaleOutHoursStr string) ([]int, error) {
 	}
 	return scaleOutHours, nil
 }
+
+// parseReaderInstanceClasses parses a comma-separated string like "r8g.xlarge,r7g.xlarge,r6g.xlarge"
+// into a slice of instance class strings. Order matters: first class is preferred for on-demand instances.
+func parseReaderInstanceClasses(configStr string) ([]string, error) {
+	if configStr == "" {
+		return nil, nil // Return nil to indicate no reader instance classes specified
+	}
+
+	instanceClasses := splitAndTrimStrings(configStr, ",")
+
+	// Validate that we have at least one instance class
+	if len(instanceClasses) == 0 {
+		return nil, fmt.Errorf("reader instance classes configuration is empty")
+	}
+
+	// Validate each instance class is not empty
+	for i, class := range instanceClasses {
+		if class == "" {
+			return nil, fmt.Errorf("instance class at position %d is empty", i)
+		}
+	}
+
+	return instanceClasses, nil
+}

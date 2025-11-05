@@ -26,6 +26,9 @@ func init() {
 	flag.DurationVar(&conf.PlanAheadTime, "planAheadTime", 10*time.Minute, "The time to plan ahead when looking up prior CPU utilization")
 	flag.UintVar(&conf.MinInstances, "minInstances", 2, "Minimum number of readers required in the cluster")
 	flag.UintVar(&conf.MaxInstances, "maxInstances", 5, "Maximum number of readers allowed in the cluster")
+	flag.StringVar(&conf.ReaderInstanceClasses, "readerInstanceClasses", "", "Comma-separated list of reader instance classes (e.g., r8g.xlarge,r7g.xlarge,r6g.xlarge). Scaler will use available reserved instances first, then fall back to first class for on-demand.")
+	flag.BoolVar(&conf.EnableBalancing, "enableBalancing", false, "Enable periodic balancing to optimize writer instance class based on available RIs")
+	flag.DurationVar(&conf.BalancingInterval, "balancingInterval", 5*time.Minute, "Interval for running balancing checks")
 
 	flag.UintVar(&conf.ServerPort, "serverPort", 8041, "Port for the ui server")
 
@@ -60,6 +63,20 @@ func main() {
 		return
 	}
 
+	// Log full configuration
+	logger.Info().
+		Str("AwsRegion", conf.AwsRegion).
+		Str("RdsClusterName", conf.RdsClusterName).
+		Str("InstanceNamePrefix", conf.InstanceNamePrefix).
+		Uint("MinInstances", conf.MinInstances).
+		Uint("MaxInstances", conf.MaxInstances).
+		Float64("TargetCpuUtil", conf.TargetCpuUtil).
+		Dur("PlanAheadTime", conf.PlanAheadTime).
+		Str("ReaderInstanceClasses", conf.ReaderInstanceClasses).
+		Bool("EnableBalancing", conf.EnableBalancing).
+		Dur("BalancingInterval", conf.BalancingInterval).
+		Msg("Starting RDS Predictive Scaler with configuration")
+
 	// Create and start the API server
 	apiServer := api.New(conf, logger, broadcast)
 	apiServer.OnClientConnect(initialBroadcasts(rdsScaler))
@@ -71,6 +88,37 @@ func main() {
 		}
 	}()
 
+	// Start balancing ticker if enabled
+	var balancingTicker *time.Ticker
+	if conf.EnableBalancing {
+		logger.Info().
+			Dur("Interval", conf.BalancingInterval).
+			Msg("Balancing enabled, starting balancing ticker")
+
+		// Run balancing immediately on startup
+		go func() {
+			logger.Info().Msg("Running initial balancing check")
+			err := rdsScaler.PerformBalancing()
+			if err != nil {
+				logger.Error().Err(err).Msg("Error during initial balancing")
+			}
+		}()
+
+		// Then run periodically
+		balancingTicker = time.NewTicker(conf.BalancingInterval)
+		go func() {
+			for range balancingTicker.C {
+				err := rdsScaler.PerformBalancing()
+				if err != nil {
+					logger.Error().Err(err).Msg("Error during balancing")
+				}
+			}
+		}()
+	} else {
+		logger.Info().Msg("Balancing disabled")
+	}
+
+	// Start the scaler (blocking call)
 	rdsScaler.Run()
 
 	// Set up a channel to capture termination signals
@@ -82,6 +130,12 @@ func main() {
 
 	// Handle the termination signal by initiating graceful shutdown
 	logger.Info().Msg("Received termination signal. Initiating graceful shutdown...")
+
+	// Stop the balancing ticker if it was started
+	if balancingTicker != nil {
+		balancingTicker.Stop()
+		logger.Info().Msg("Balancing ticker stopped")
+	}
 
 	// Stop the API server and the scaler
 	apiServer.Stop()

@@ -261,6 +261,22 @@ func (s *Scaler) submitBroadcast(broadcast *types.Broadcast) {
 func (s *Scaler) scaleOut(readerNamePrefix string, numInstances uint) error {
 	s.scalerStatus.IsScaling = true
 
+	// Ensure IsScaling is reset on error
+	var scalingSucceeded bool
+	defer func() {
+		if !scalingSucceeded {
+			s.scalerStatus.IsScaling = false
+			s.logger.Warn().Msg("Scale out failed, resetting IsScaling flag")
+		}
+	}()
+
+	// Parse reader instance classes configuration
+	readerInstancePool, err := parseReaderInstanceClasses(s.config.ReaderInstanceClasses)
+	if err != nil {
+		s.logger.Error().Err(err).Msg("Error parsing reader instance classes, falling back to writer's instance class")
+		readerInstancePool = nil // Fall back to using writer's instance class
+	}
+
 	currentHour := time.Now().In(time.UTC).Hour()
 	newReaderInstanceNames := make([]string, numInstances)
 
@@ -276,22 +292,31 @@ func (s *Scaler) scaleOut(readerNamePrefix string, numInstances uint) error {
 			return fmt.Errorf("max number of instances reached")
 		}
 
+		// Select the appropriate instance class based on the pool configuration
+		selectedInstanceClass := s.selectInstanceClass(readerInstancePool, readerInstances)
+
 		// Generate a random UID for the new reader instance name
 		randomUID := generateRandomUID()
 
 		// Create the reader instance name with the prefix, current scale-out hour, and random UID
 		readerName := fmt.Sprintf("%s%d-%s", readerNamePrefix, currentHour, randomUID)
 
-		_, err = s.createReaderInstance(readerName, writerInstance)
+		_, err = s.createReaderInstance(readerName, writerInstance, selectedInstanceClass)
 		if err != nil {
 			return fmt.Errorf("failed to add reader instance: %v", err)
 		}
 
-		s.logger.Info().Str("NewReaderInstanceName", readerName).Msg("Scaling out operation successful")
+		s.logger.Info().
+			Str("NewReaderInstanceName", readerName).
+			Str("InstanceClass", selectedInstanceClass).
+			Msg("Scaling out operation successful")
 
 		// Add the new reader instance name to the slice
 		newReaderInstanceNames[i] = readerName
 	}
+
+	// Mark scaling as succeeded so defer doesn't reset the flag
+	scalingSucceeded = true
 
 	go func() {
 		start := time.Now().In(time.UTC)
@@ -323,20 +348,39 @@ func (s *Scaler) scaleOut(readerNamePrefix string, numInstances uint) error {
 func (s *Scaler) scaleIn(numInstances uint) error {
 	s.scalerStatus.IsScaling = true
 
+	// Ensure IsScaling is reset on error
+	var scalingSucceeded bool
+	defer func() {
+		if !scalingSucceeded {
+			s.scalerStatus.IsScaling = false
+			s.logger.Warn().Msg("Scale in failed, resetting IsScaling flag")
+		}
+	}()
+
 	readerInstances, err := s.getReaderInstances(StatusAll)
 
 	if err != nil {
 		return fmt.Errorf("failed to get reader instances: %v", err)
 	}
 
+	// Parse reader instance classes configuration to determine priority
+	readerInstancePool, err := parseReaderInstanceClasses(s.config.ReaderInstanceClasses)
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("Error parsing reader instance classes for scale-in prioritization")
+		readerInstancePool = nil
+	}
+
+	// Sort instances by priority (lowest priority first for removal)
+	sortedInstances := s.sortInstancesByRemovalPriority(readerInstances, readerInstancePool)
+
 	for i := 0; i < int(numInstances); i++ {
 		// Check if there are any reader instances available to scale in
-		if len(readerInstances) == 0 {
+		if i >= len(sortedInstances) {
 			break
 		}
 
-		// Choose a reader instance to remove
-		instance := readerInstances[i]
+		// Choose a reader instance to remove (lowest priority first)
+		instance := sortedInstances[i]
 
 		// Wait for the instance to become deletable
 		err := s.waitUntilInstanceDeletable(*instance.DBInstanceIdentifier)
@@ -352,6 +396,9 @@ func (s *Scaler) scaleIn(numInstances uint) error {
 		if err != nil {
 			return fmt.Errorf("failed to remove reader instance: %v", err)
 		}
+
+		// Mark scaling as succeeded so defer doesn't reset the flag
+		scalingSucceeded = true
 
 		go func() {
 			err := s.waitUntilInstanceIsDeleted(*instance.DBInstanceIdentifier)
@@ -370,4 +417,9 @@ func (s *Scaler) scaleIn(numInstances uint) error {
 func (s *Scaler) Stop() {
 	s.logger.Info().Msg("Stopping scaler")
 	close(s.broadcast)
+}
+
+// PerformBalancing is a public method to trigger balancing from main
+func (s *Scaler) PerformBalancing() error {
+	return s.performBalancing()
 }

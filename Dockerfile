@@ -1,8 +1,4 @@
-ARG ALPINE_VERSION=3.19
-ARG GOLANG_VERSION=1.21
-ARG NODE_VERSION=21
-
-FROM node:$NODE_VERSION-alpine$ALPINE_VERSION AS uibuilder
+FROM node:22.21.1-alpine3.21 AS ui_builder
 ARG NODE_ENV=production
 ENV NODE_ENV=$NODE_ENV
 WORKDIR /ui
@@ -12,7 +8,7 @@ COPY ui .
 RUN npm run build
 
 # Stage 1: Build the Go binary
-FROM golang:$GOLANG_VERSION-alpine$ALPINE_VERSION AS builder
+FROM golang:1.23-alpine3.22 AS go_builder
 
 # Set the working directory
 WORKDIR /app
@@ -24,14 +20,14 @@ COPY . .
 RUN go build -o rds-scaler .
 
 # Stage 2: Create the runtime image
-FROM alpine:$ALPINE_VERSION as runner
+FROM alpine:3.22 AS runner
 
 # Set the working directory
 WORKDIR /app
 
 # Copy the binary from the build stage to the runtime stage
-COPY --from=builder /app/rds-scaler .
-COPY --from=uibuilder /ui/dist ./ui/build
+COPY --from=go_builder /app/rds-scaler .
+COPY --from=ui_builder /ui/dist ./ui/build
 
 # Install ca-certificates for SSL support (required for AWS SDK)
 RUN apk add --no-cache ca-certificates

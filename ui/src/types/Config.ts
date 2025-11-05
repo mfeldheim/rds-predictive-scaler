@@ -8,4 +8,7 @@ interface Config {
     target_cpu_util: number;
     plan_ahead_time: number;
     server_port: number;
+    reader_instance_classes: string;
+    enable_balancing: boolean;
+    balancing_interval: number;
 }

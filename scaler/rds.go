@@ -2,6 +2,7 @@ package scaler
 
 import (
 	"fmt"
+	"strings"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/rds"
 	"math/rand"
@@ -80,23 +81,278 @@ func (s *Scaler) getWriterInstance() (*rds.DBInstance, error) {
 	return nil, fmt.Errorf("writer instance not found in cluster: %s", s.config.RdsClusterName)
 }
 
-func (s *Scaler) createReaderInstance(readerName string, writerInstance *rds.DBInstance) (*rds.CreateDBInstanceOutput, error) {
+// getReservedInstanceCounts queries AWS for active reserved DB instances and returns counts by instance class
+func (s *Scaler) getReservedInstanceCounts() (map[string]int, error) {
+	input := &rds.DescribeReservedDBInstancesInput{}
+
+	result, err := s.rdsClient.DescribeReservedDBInstances(input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to describe reserved DB instances: %v", err)
+	}
+
+	reservedCounts := make(map[string]int)
+	for _, reservation := range result.ReservedDBInstances {
+		// Only count active reserved instances
+		state := aws.StringValue(reservation.State)
+		if state != "active" {
+			s.logger.Debug().
+				Str("InstanceClass", aws.StringValue(reservation.DBInstanceClass)).
+				Str("State", state).
+				Msg("Skipping non-active reserved instance")
+			continue
+		}
+
+		if reservation.DBInstanceClass != nil && reservation.DBInstanceCount != nil {
+			instanceClass := aws.StringValue(reservation.DBInstanceClass)
+			count := int(aws.Int64Value(reservation.DBInstanceCount))
+
+			// Accumulate counts in case there are multiple reservations for the same class
+			reservedCounts[instanceClass] += count
+
+			s.logger.Debug().
+				Str("InstanceClass", instanceClass).
+				Int("ReservedCount", count).
+				Str("State", state).
+				Msg("Found active reserved DB instance")
+		}
+	}
+
+	return reservedCounts, nil
+}
+
+// countInstancesByClass counts the number of reader instances by instance class
+func (s *Scaler) countInstancesByClass(instances []*rds.DBInstance) map[string]int {
+	counts := make(map[string]int)
+	for _, instance := range instances {
+		if instance.DBInstanceClass != nil {
+			instanceClass := aws.StringValue(instance.DBInstanceClass)
+			counts[instanceClass]++
+		}
+	}
+	return counts
+}
+
+// normalizeInstanceClass ensures instance class has the "db." prefix
+func normalizeInstanceClass(instanceClass string) string {
+	if !strings.HasPrefix(instanceClass, "db.") {
+		return "db." + instanceClass
+	}
+	return instanceClass
+}
+
+// selectInstanceClass selects the appropriate instance class based on available reserved instances
+// Returns the instance class to use, or empty string if the pool config is not set (fallback to writer's class)
+func (s *Scaler) selectInstanceClass(instanceClasses []string, currentInstances []*rds.DBInstance) string {
+	if len(instanceClasses) == 0 {
+		return "" // Empty string signals to use writer's instance class
+	}
+
+	// Normalize all instance classes to include "db." prefix
+	normalizedClasses := make([]string, len(instanceClasses))
+	for i, class := range instanceClasses {
+		normalizedClasses[i] = normalizeInstanceClass(class)
+	}
+
+	// Get reserved instance counts from AWS API
+	reservedCounts, err := s.getReservedInstanceCounts()
+	if err != nil {
+		s.logger.Error().Err(err).Msg("Failed to get reserved instance counts, falling back to first configured class")
+		// Fall back to first instance class (on-demand)
+		return normalizedClasses[0]
+	}
+
+	// Count current instances by class
+	currentCounts := s.countInstancesByClass(currentInstances)
+
+	// Iterate through configured instance classes in priority order
+	// Try to use reserved instances first
+	for _, instanceClass := range normalizedClasses {
+		reservedCount := reservedCounts[instanceClass]
+		currentCount := currentCounts[instanceClass]
+		availableRI := reservedCount - currentCount
+
+		if availableRI > 0 {
+			s.logger.Info().
+				Str("InstanceClass", instanceClass).
+				Int("ReservedCount", reservedCount).
+				Int("CurrentCount", currentCount).
+				Int("AvailableRI", availableRI).
+				Msg("Selected instance class with available reserved instance")
+			return instanceClass
+		}
+	}
+
+	// No available reserved instances, use first configured class for on-demand
+	s.logger.Info().
+		Str("InstanceClass", normalizedClasses[0]).
+		Msg("No available reserved instances, using first configured class for on-demand")
+	return normalizedClasses[0]
+}
+
+// sortInstancesByRemovalPriority sorts instances by removal priority (lowest priority first)
+// Prioritizes removing on-demand instances over RI-backed instances to maximize RI utilization
+func (s *Scaler) sortInstancesByRemovalPriority(instances []*rds.DBInstance, instanceClasses []string) []*rds.DBInstance {
+	if len(instances) == 0 {
+		return instances
+	}
+
+	// Normalize all instance classes to include "db." prefix
+	normalizedClasses := make([]string, len(instanceClasses))
+	for i, class := range instanceClasses {
+		normalizedClasses[i] = normalizeInstanceClass(class)
+	}
+
+	// Get reserved instance counts from AWS API
+	reservedCounts, err := s.getReservedInstanceCounts()
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("Failed to get reserved instance counts for scale-in prioritization")
+		// Fall back to simple ordering if we can't get RI info
+		return instances
+	}
+
+	// Count current instances by class
+	currentCounts := s.countInstancesByClass(instances)
+
+	// Create a priority map for instance classes (lower index = higher priority to keep)
+	classPriorityMap := make(map[string]int)
+	if len(normalizedClasses) > 0 {
+		for i, class := range normalizedClasses {
+			classPriorityMap[class] = i
+		}
+	}
+
+	// Create a copy of the instances slice to sort
+	sorted := make([]*rds.DBInstance, len(instances))
+	copy(sorted, instances)
+
+	// Sort instances with a comparison function
+	// Priority for removal (higher score = remove first):
+	// 1. On-demand instances (not backed by RI)
+	// 2. Among on-demand: lower priority classes (higher index in config)
+	// 3. Among RI-backed: lower priority classes
+	for i := 0; i < len(sorted)-1; i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			scoreI := s.calculateRemovalScore(sorted[i], reservedCounts, currentCounts, classPriorityMap)
+			scoreJ := s.calculateRemovalScore(sorted[j], reservedCounts, currentCounts, classPriorityMap)
+
+			// Higher score = remove first, so swap if j has higher score
+			if scoreJ > scoreI {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+
+	return sorted
+}
+
+// calculateRemovalScore calculates a score for instance removal priority
+// Higher score = higher priority for removal (remove first)
+func (s *Scaler) calculateRemovalScore(instance *rds.DBInstance, reservedCounts, currentCounts map[string]int, classPriorityMap map[string]int) int {
+	instanceClass := aws.StringValue(instance.DBInstanceClass)
+
+	reservedCount := reservedCounts[instanceClass]
+	currentCount := currentCounts[instanceClass]
+
+	// Determine if this instance is RI-backed or on-demand
+	// If current count > reserved count, some instances are on-demand
+	isRIBacked := currentCount <= reservedCount
+
+	// Get class priority (lower index = higher priority to keep)
+	classPriority, hasClassPriority := classPriorityMap[instanceClass]
+	if !hasClassPriority {
+		classPriority = 1000 // Very low priority if not in configured classes
+	}
+
+	// Calculate score:
+	// - On-demand instances: base score 1000 + class priority
+	// - RI-backed instances: base score 0 + class priority
+	// This ensures on-demand instances are always removed before RI-backed ones
+	score := 0
+	if !isRIBacked {
+		score = 1000 // On-demand instances get high removal priority
+	}
+	score += classPriority // Add class priority (higher index = higher score = remove first)
+
+	return score
+}
+
+func (s *Scaler) createReaderInstance(readerName string, writerInstance *rds.DBInstance, instanceClass string) (*rds.CreateDBInstanceOutput, error) {
+	// Determine which instance class to use
+	var dbInstanceClass *string
+	if instanceClass != "" {
+		dbInstanceClass = aws.String(instanceClass)
+	} else {
+		// Fall back to writer's instance class if not specified
+		dbInstanceClass = writerInstance.DBInstanceClass
+	}
+
 	// Use the writer instance's configuration as a template for the new reader instance
 	readerDBInstance := &rds.CreateDBInstanceInput{
-		DBInstanceClass:         writerInstance.DBInstanceClass,
-		Engine:                  writerInstance.Engine,
-		DBClusterIdentifier:     aws.String(s.config.RdsClusterName),
-		DBInstanceIdentifier:    aws.String(readerName),
-		PubliclyAccessible:      aws.Bool(false),
-		MultiAZ:                 writerInstance.MultiAZ,
-		CopyTagsToSnapshot:      writerInstance.CopyTagsToSnapshot,
-		AutoMinorVersionUpgrade: writerInstance.AutoMinorVersionUpgrade,
-		DBParameterGroupName:    writerInstance.DBParameterGroups[0].DBParameterGroupName,
-		CACertificateIdentifier: writerInstance.CACertificateIdentifier,
+		DBInstanceClass:                   dbInstanceClass,
+		Engine:                            writerInstance.Engine,
+		DBClusterIdentifier:               aws.String(s.config.RdsClusterName),
+		DBInstanceIdentifier:              aws.String(readerName),
+		PubliclyAccessible:                aws.Bool(false),
+		MultiAZ:                           writerInstance.MultiAZ,
+		CopyTagsToSnapshot:                writerInstance.CopyTagsToSnapshot,
+		AutoMinorVersionUpgrade:           writerInstance.AutoMinorVersionUpgrade,
+		DBParameterGroupName:              writerInstance.DBParameterGroups[0].DBParameterGroupName,
+		CACertificateIdentifier:           writerInstance.CACertificateIdentifier,
+		MonitoringInterval:                writerInstance.MonitoringInterval,
+		MonitoringRoleArn:                 writerInstance.MonitoringRoleArn,
+		EnablePerformanceInsights:         writerInstance.PerformanceInsightsEnabled,
+		PerformanceInsightsKMSKeyId:       writerInstance.PerformanceInsightsKMSKeyId,
+		PerformanceInsightsRetentionPeriod: writerInstance.PerformanceInsightsRetentionPeriod,
 	}
 
 	// Perform the scaling operation to add a reader to the cluster
 	return s.rdsClient.CreateDBInstance(readerDBInstance)
+}
+
+// failoverToInstance performs a failover to promote the specified instance to writer
+func (s *Scaler) failoverToInstance(targetInstanceId string) error {
+	input := &rds.FailoverDBClusterInput{
+		DBClusterIdentifier:         aws.String(s.config.RdsClusterName),
+		TargetDBInstanceIdentifier: aws.String(targetInstanceId),
+	}
+
+	s.logger.Info().
+		Str("Cluster", s.config.RdsClusterName).
+		Str("TargetInstance", targetInstanceId).
+		Msg("Initiating cluster failover")
+
+	_, err := s.rdsClient.FailoverDBCluster(input)
+	if err != nil {
+		return fmt.Errorf("failed to failover cluster: %v", err)
+	}
+
+	// Wait for failover to complete (writer instance to change)
+	s.logger.Info().Msg("Waiting for failover to complete...")
+
+	// Poll until the target instance becomes the writer
+	for i := 0; i < 60; i++ { // Wait up to 5 minutes (60 * 5 seconds)
+		time.Sleep(5 * time.Second)
+
+		currentWriter, err := s.getWriterInstance()
+		if err != nil {
+			s.logger.Warn().Err(err).Msg("Error checking writer instance during failover")
+			continue
+		}
+
+		if aws.StringValue(currentWriter.DBInstanceIdentifier) == targetInstanceId {
+			s.logger.Info().
+				Str("NewWriter", targetInstanceId).
+				Msg("Failover completed successfully")
+			return nil
+		}
+
+		s.logger.Debug().
+			Str("CurrentWriter", aws.StringValue(currentWriter.DBInstanceIdentifier)).
+			Str("TargetWriter", targetInstanceId).
+			Msg("Waiting for failover to complete...")
+	}
+
+	return fmt.Errorf("failover did not complete within timeout period")
 }
 
 func (s *Scaler) getReaderInstances(statusFilter uint64) ([]*rds.DBInstance, error) {
