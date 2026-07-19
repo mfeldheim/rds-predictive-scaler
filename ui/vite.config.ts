@@ -7,6 +7,16 @@ export default defineConfig({
   build: {
     sourcemap: false,
     minify: 'terser',
+    rollupOptions: {
+      onwarn(warning, warn) {
+        // Suppress circular dependency warnings from Material-UI
+        if (warning.code === 'CIRCULAR_DEPENDENCY') {
+          return
+        }
+        // Use default for everything else
+        warn(warning)
+      },
+    },
   },
   server: {
     port: 3000,
