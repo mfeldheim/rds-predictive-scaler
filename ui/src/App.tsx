@@ -113,15 +113,26 @@ function App() {
                             >
                                 <MenuIcon/>
                             </IconButton>
-                            <Typography
-                                component="h1"
-                                variant="h6"
-                                color="inherit"
-                                noWrap
-                                sx={{flexGrow: 1}}
-                            >
-                                ScaleAI RDS Predictive Scaler
-                            </Typography>
+                            <Box sx={{display: 'flex', alignItems: 'center', gap: 2, flexGrow: 1}}>
+                                <Box
+                                    component="img"
+                                    src="/logo_transparent.png"
+                                    alt="Logo"
+                                    sx={{
+                                        height: 40,
+                                        width: 'auto',
+                                    }}
+                                />
+                                <Typography
+                                    component="h1"
+                                    variant="h6"
+                                    color="inherit"
+                                    noWrap
+                                    sx={{fontWeight: 600}}
+                                >
+                                    RDS Predictive Scaler
+                                </Typography>
+                            </Box>
                             <IconButton color="inherit">
                                 <Badge badgeContent={4} color="secondary">
                                     <NotificationsIcon/>
