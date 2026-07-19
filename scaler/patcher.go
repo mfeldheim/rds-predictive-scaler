@@ -242,8 +242,6 @@ func (s *Scaler) StartPatchMode() {
 // StopPatchMode cancels an in-progress patch run.
 func (s *Scaler) StopPatchMode() {
 	s.patchMu.Lock()
-	defer s.patchMu.Unlock()
-
 	if s.patchStopCh != nil {
 		close(s.patchStopCh)
 		s.patchStopCh = nil
@@ -251,7 +249,10 @@ func (s *Scaler) StopPatchMode() {
 	s.patchStatus.Active = false
 	s.patchStatus.CurrentlyPatching = ""
 	s.patchStatus.TempInstanceName = ""
-	s.broadcastPatchStatus()
+	status := s.patchStatus
+	s.patchMu.Unlock()
+
+	s.submitBroadcast(&types.Broadcast{MessageType: "patchStatus", Data: status})
 	s.logger.Info().Msg("Patch mode stopped")
 }
 
