@@ -11,10 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.1.7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v5.1.0
         with:
           go-version: '1.25'
           cache: true
@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.1.7
 
       - name: Generate tag
         id: generate-tag
@@ -47,7 +47,7 @@ jobs:
           fi
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v3.6.0
 
       - name: Login to Docker Hub
         if: steps.should-push.outputs.push == 'true'
@@ -55,7 +55,7 @@ jobs:
 
       - name: Build image (no push)
         if: steps.should-push.outputs.push == 'false'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v6.2.0
         with:
           context: .
           cache-from: type=gha
@@ -65,7 +65,7 @@ jobs:
 
       - name: Build, tag, and push image to Docker Hub
         if: steps.should-push.outputs.push == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v6.2.0
         id: build-image
         with:
           context: .
