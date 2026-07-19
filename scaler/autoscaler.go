@@ -10,6 +10,7 @@ import (
 	"predictive-rds-scaler/metrics"
 	"predictive-rds-scaler/types"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -20,6 +21,10 @@ type Scaler struct {
 	logger       *zerolog.Logger
 	broadcast    chan types.Broadcast
 	metrics      *metrics.Metrics
+
+	patchStatus types.PatchStatus
+	patchMu     sync.Mutex
+	patchStopCh chan struct{}
 }
 
 func New(conf *types.Config, logger *zerolog.Logger, awsSession *session.Session, broadcast chan types.Broadcast) (*Scaler, error) {
@@ -41,14 +46,29 @@ func New(conf *types.Config, logger *zerolog.Logger, awsSession *session.Session
 
 func (s *Scaler) Run() {
 	ticker := time.NewTicker(10 * time.Second)
+	patchCheckTicker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	defer patchCheckTicker.Stop()
 
 	boostHours, err := parseBoostHours(s.config.BoostHours)
 	if err != nil {
 		s.logger.Error().Err(err).Msg("Error parsing scale out hours")
 	}
 
-	for range ticker.C {
-		s.scale(boostHours)
+	for {
+		select {
+		case <-ticker.C:
+			s.patchMu.Lock()
+			patching := s.patchStatus.Active
+			s.patchMu.Unlock()
+			if patching {
+				s.logger.Debug().Msg("Patch mode active, skipping auto-scale cycle")
+				continue
+			}
+			s.scale(boostHours)
+		case <-patchCheckTicker.C:
+			s.CheckAndAutoApplyPatches()
+		}
 	}
 }
 
@@ -191,11 +211,24 @@ func (s *Scaler) getClusterStatus() (*types.ClusterStatus, error) {
 		return nil, fmt.Errorf("didn't get current CPU utilization: %v", err)
 	}
 
+	pendingByArn, _ := s.getPendingMaintenanceActions()
+
+	s.patchMu.Lock()
+	patchTargets := make(map[string]bool)
+	for _, info := range s.patchStatus.PendingInstances {
+		patchTargets[info.Identifier] = true
+	}
+	s.patchMu.Unlock()
+
+	writerArn := aws.StringValue(writerInstance.DBInstanceArn)
 	writerStatus := types.InstanceStatus{
-		Identifier:     *writerInstance.DBInstanceIdentifier,
-		IsWriter:       true,
-		Status:         *writerInstance.DBInstanceStatus,
-		CPUUtilization: writerUtilization,
+		Identifier:        *writerInstance.DBInstanceIdentifier,
+		IsWriter:          true,
+		Status:            *writerInstance.DBInstanceStatus,
+		CPUUtilization:    writerUtilization,
+		MaintenanceWindow: aws.StringValue(writerInstance.PreferredMaintenanceWindow),
+		PendingActions:    pendingByArn[writerArn],
+		IsPatchTarget:     patchTargets[*writerInstance.DBInstanceIdentifier],
 	}
 
 	s.logInstanceStatus(writerStatus)
@@ -212,10 +245,13 @@ func (s *Scaler) getClusterStatus() (*types.ClusterStatus, error) {
 		}
 
 		readerStatus := types.InstanceStatus{
-			Identifier:     *readerInstance.DBInstanceIdentifier,
-			IsWriter:       false,
-			Status:         *readerInstance.DBInstanceStatus,
-			CPUUtilization: readerUtilization,
+			Identifier:        *readerInstance.DBInstanceIdentifier,
+			IsWriter:          false,
+			Status:            *readerInstance.DBInstanceStatus,
+			CPUUtilization:    readerUtilization,
+			MaintenanceWindow: aws.StringValue(readerInstance.PreferredMaintenanceWindow),
+			PendingActions:    pendingByArn[aws.StringValue(readerInstance.DBInstanceArn)],
+			IsPatchTarget:     patchTargets[*readerInstance.DBInstanceIdentifier],
 		}
 
 		s.logInstanceStatus(readerStatus)
@@ -373,6 +409,11 @@ func (s *Scaler) scaleIn(numInstances uint) error {
 	// Sort instances by priority (lowest priority first for removal)
 	sortedInstances := s.sortInstancesByRemovalPriority(readerInstances, readerInstancePool)
 
+	// Collect the name of any temp patch reader so we never accidentally delete it.
+	s.patchMu.Lock()
+	tempPatchInstance := s.patchStatus.TempInstanceName
+	s.patchMu.Unlock()
+
 	for i := 0; i < int(numInstances); i++ {
 		// Check if there are any reader instances available to scale in
 		if i >= len(sortedInstances) {
@@ -381,6 +422,12 @@ func (s *Scaler) scaleIn(numInstances uint) error {
 
 		// Choose a reader instance to remove (lowest priority first)
 		instance := sortedInstances[i]
+
+		// Never delete the temporary reader that the patcher is currently waiting on.
+		if tempPatchInstance != "" && aws.StringValue(instance.DBInstanceIdentifier) == tempPatchInstance {
+			s.logger.Info().Str("InstanceIdentifier", tempPatchInstance).Msg("scaleIn: skipping temp patch reader")
+			continue
+		}
 
 		// Wait for the instance to become deletable
 		err := s.waitUntilInstanceDeletable(*instance.DBInstanceIdentifier)

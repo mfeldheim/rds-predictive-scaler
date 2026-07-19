@@ -22,7 +22,9 @@ type Server struct {
 	waitGroup           *sync.WaitGroup
 	shutdownChannel     chan struct{}
 
-	onClientConnect func() []types.Broadcast
+	onClientConnect  func() []types.Broadcast
+	onStartPatchMode func()
+	onStopPatchMode  func()
 }
 
 func New(conf *types.Config, logger *zerolog.Logger, channel chan types.Broadcast) *Server {
@@ -153,6 +155,11 @@ func (api *Server) OnClientConnect(f func() []types.Broadcast) {
 	api.onClientConnect = f
 }
 
+func (api *Server) OnPatchAction(onStart func(), onStop func()) {
+	api.onStartPatchMode = onStart
+	api.onStopPatchMode = onStop
+}
+
 func (api *Server) websocketListen(conn *websocket.Conn) {
 	defer func() {
 		api.websocketClientDisconnect(conn)
@@ -187,6 +194,18 @@ func (api *Server) handleIncomingMessage(message []byte) {
 		}
 		api.conf = &conf
 		api.logger.Info().Msgf("Received configuration update: %+v", api.conf)
+
+	case "start_patch_mode":
+		api.logger.Info().Msg("Received start_patch_mode command")
+		if api.onStartPatchMode != nil {
+			go api.onStartPatchMode()
+		}
+
+	case "stop_patch_mode":
+		api.logger.Info().Msg("Received stop_patch_mode command")
+		if api.onStopPatchMode != nil {
+			go api.onStopPatchMode()
+		}
 
 	default:
 		api.logger.Warn().Msg("Received an unsupported message type")

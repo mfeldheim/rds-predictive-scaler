@@ -221,6 +221,16 @@ func (s *Scaler) performBalancing() error {
 		return nil
 	}
 
+	// Never run balancing while patch mode is active – it would race with failovers
+	// and temp-reader creation done by the patcher.
+	s.patchMu.Lock()
+	patchActive := s.patchStatus.Active
+	s.patchMu.Unlock()
+	if patchActive {
+		s.logger.Debug().Msg("Patch mode active, skipping balancing")
+		return nil
+	}
+
 	// Check if scaling is in progress
 	if s.scalerStatus.IsScaling {
 		s.logger.Debug().Msg("Scaling operation in progress, skipping balancing")

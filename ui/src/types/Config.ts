@@ -11,4 +11,5 @@ interface Config {
     reader_instance_classes: string;
     enable_balancing: boolean;
     balancing_interval: number;
+    enable_auto_patch: boolean;
 }

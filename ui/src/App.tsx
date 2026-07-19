@@ -16,6 +16,7 @@ import ClusterMap from "./components/ClusterMap.tsx";
 import GraphUtilization from "./components/GraphUtilization.tsx";
 import GraphClusterSize from "./components/GraphClusterSize.tsx";
 import Broadcast from "./types/Broadcast.ts";
+import PatchModePanel from "./components/PatchModePanel.tsx";
 
 const theme = createTheme({
     palette: {
@@ -34,7 +35,7 @@ function App() {
             : 'localhost:8001/api/v1/namespaces/kube-system/services/http:rds-predictive-scaler:http/proxy/') +
         'ws';
 
-    const {lastMessage, readyState} = useWebSocket(socketUrl, {
+    const {lastMessage, readyState, sendMessage} = useWebSocket(socketUrl, {
         onOpen: () => {
             console.log('WebSocket connection established');
         },
@@ -48,6 +49,7 @@ function App() {
     const [clusterStatusPrediction, setClusterStatusPrediction] = useState<ClusterStatus | null>(null);
     const [clusterStatusHistory, setClusterStatusHistory] = useState<ClusterStatus[]>([]);
     const [clusterStatusPredictionHistory, setClusterStatusPredictionHistory] = useState<ClusterStatus[]>([]);
+    const [patchStatus, setPatchStatus] = useState<PatchStatus | null>(null);
 
     const toggleDrawer = () => {
         setAppBarOpen(!appBarOpen);
@@ -78,6 +80,9 @@ function App() {
                 break;
             case 'clusterStatusHistory':
                 setClusterStatusHistory(broadcast.data);
+                break;
+            case 'patchStatus':
+                setPatchStatus(broadcast.data);
                 break;
         }
     }, [lastMessage]);
@@ -177,6 +182,18 @@ function App() {
 
                                 <Grid item xs={12}>
                                     <ClusterMap clusterStatus={clusterStatus}/>
+                                </Grid>
+
+                                <Grid item xs={12}>
+                                    <Paper sx={{p: 2, display: 'flex', flexDirection: 'column'}}>
+                                        <PatchModePanel
+                                            patchStatus={patchStatus}
+                                            autoPatchEnabled={config?.enable_auto_patch ?? true}
+                                            onStartPatch={() => sendMessage(JSON.stringify({type: 'start_patch_mode', data: null}))}
+                                            onStopPatch={() => sendMessage(JSON.stringify({type: 'stop_patch_mode', data: null}))}
+                                            clusterInstances={clusterStatus?.instance_status ?? []}
+                                        />
+                                    </Paper>
                                 </Grid>
                             </Grid>
 
