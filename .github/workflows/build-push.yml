@@ -35,13 +35,34 @@ jobs:
           TAG_NAME="${TAG_NAME//\//-}"
           echo "tag=${TAG_NAME}" >> $GITHUB_OUTPUT
 
+      - name: Determine if should push
+        id: should-push
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" || "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "push=true" >> $GITHUB_OUTPUT
+          else
+            echo "push=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2.5.0
 
       - name: Login to Docker Hub
+        if: steps.should-push.outputs.push == 'true'
         run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
+      - name: Build image (no push)
+        if: steps.should-push.outputs.push == 'false'
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64
+          push: false
+
       - name: Build, tag, and push image to Docker Hub
+        if: steps.should-push.outputs.push == 'true'
         uses: docker/build-push-action@v4
         id: build-image
         with:
