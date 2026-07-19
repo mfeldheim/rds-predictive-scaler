@@ -13,6 +13,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
+      - name: Generate tag
+        id: generate-tag
+        run: |
+          TAG_NAME="${{ github.ref_name }}"
+          TAG_NAME="${TAG_NAME//\//-}"
+          echo "tag=${TAG_NAME}" >> $GITHUB_OUTPUT
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2.5.0
 
@@ -28,4 +35,4 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: opendi/predictive-rds-scaler:latest,opendi/predictive-rds-scaler:${{ github.ref_name }}
+          tags: opendi/predictive-rds-scaler:latest,opendi/predictive-rds-scaler:${{ steps.generate-tag.outputs.tag }}
