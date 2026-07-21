@@ -21,7 +21,7 @@ jobs:
       - name: Run Go tests
         run: go test ./... -v
 
-  build-amd64:
+  build:
     needs: test
     runs-on: ubuntu-latest
     steps:
@@ -44,60 +44,8 @@ jobs:
             echo "push=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4.2.0
-
-      - name: Login to GitHub Container Registry
-        if: steps.should-push.outputs.push == 'true'
-        uses: docker/login-action@v4.4.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push image (AMD64)
-        if: steps.should-push.outputs.push == 'true'
-        uses: docker/build-push-action@v7.3.0
-        with:
-          context: .
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/amd64
-          push: true
-          tags: ghcr.io/mfeldheim/rds-predictive-scaler:latest-amd64,ghcr.io/mfeldheim/rds-predictive-scaler:${{ steps.generate-tag.outputs.tag }}-amd64
-
-      - name: Build image (no push)
-        if: steps.should-push.outputs.push == 'false'
-        uses: docker/build-push-action@v7.3.0
-        with:
-          context: .
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/amd64
-          push: false
-
-  build-arm64:
-    needs: test
-    runs-on: ubuntu-latest-arm64
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7.0.1
-
-      - name: Generate tag
-        id: generate-tag
-        run: |
-          TAG_NAME="${{ github.ref_name }}"
-          TAG_NAME="${TAG_NAME//\//-}"
-          echo "tag=${TAG_NAME}" >> $GITHUB_OUTPUT
-
-      - name: Determine if should push
-        id: should-push
-        run: |
-          if [[ "${{ github.ref_type }}" == "tag" || "${{ github.ref }}" == "refs/heads/main" ]]; then
-            echo "push=true" >> $GITHUB_OUTPUT
-          else
-            echo "push=false" >> $GITHUB_OUTPUT
-          fi
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3.0.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4.2.0
@@ -110,16 +58,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push image (ARM64)
+      - name: Build and push image
         if: steps.should-push.outputs.push == 'true'
         uses: docker/build-push-action@v7.3.0
         with:
           context: .
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/arm64
+          cache-from: type=gha,scope=build-${{ matrix.platform }}
+          cache-to: type=gha,scope=build-${{ matrix.platform }},mode=max
+          platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/mfeldheim/rds-predictive-scaler:latest-arm64,ghcr.io/mfeldheim/rds-predictive-scaler:${{ steps.generate-tag.outputs.tag }}-arm64
+          tags: ghcr.io/mfeldheim/rds-predictive-scaler:latest,ghcr.io/mfeldheim/rds-predictive-scaler:${{ steps.generate-tag.outputs.tag }}
 
       - name: Build image (no push)
         if: steps.should-push.outputs.push == 'false'
@@ -128,43 +76,5 @@ jobs:
           context: .
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: linux/arm64
+          platforms: linux/amd64,linux/arm64
           push: false
-
-  merge-manifests:
-    needs: [build-amd64, build-arm64]
-    runs-on: ubuntu-latest
-    if: always() && (needs.build-amd64.result == 'success' || needs.build-arm64.result == 'success')
-    steps:
-      - name: Generate tag
-        id: generate-tag
-        run: |
-          TAG_NAME="${{ github.ref_name }}"
-          TAG_NAME="${TAG_NAME//\//-}"
-          echo "tag=${TAG_NAME}" >> $GITHUB_OUTPUT
-
-      - name: Determine if should push
-        id: should-push
-        run: |
-          if [[ "${{ github.ref_type }}" == "tag" || "${{ github.ref }}" == "refs/heads/main" ]]; then
-            echo "push=true" >> $GITHUB_OUTPUT
-          else
-            echo "push=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Login to GitHub Container Registry
-        if: steps.should-push.outputs.push == 'true'
-        uses: docker/login-action@v4.4.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create and push multi-arch manifest
-        if: steps.should-push.outputs.push == 'true'
-        run: |
-          docker buildx imagetools create \
-            -t ghcr.io/mfeldheim/rds-predictive-scaler:latest \
-            -t ghcr.io/mfeldheim/rds-predictive-scaler:${{ steps.generate-tag.outputs.tag }} \
-            ghcr.io/mfeldheim/rds-predictive-scaler:latest-amd64 \
-            ghcr.io/mfeldheim/rds-predictive-scaler:latest-arm64
