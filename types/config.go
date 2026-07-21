@@ -15,4 +15,5 @@ type Config struct {
 	ReaderInstanceClasses string        `json:"reader_instance_classes"`
 	EnableBalancing       bool          `json:"enable_balancing"`
 	BalancingInterval     time.Duration `json:"balancing_interval"`
+	EnableAutoPatch       bool          `json:"enable_auto_patch"`
 }

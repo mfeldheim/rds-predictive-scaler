@@ -29,6 +29,7 @@ func init() {
 	flag.StringVar(&conf.ReaderInstanceClasses, "readerInstanceClasses", "", "Comma-separated list of reader instance classes (e.g., r8g.xlarge,r7g.xlarge,r6g.xlarge). Scaler will use available reserved instances first, then fall back to first class for on-demand.")
 	flag.BoolVar(&conf.EnableBalancing, "enableBalancing", false, "Enable periodic balancing to optimize writer instance class based on available RIs")
 	flag.DurationVar(&conf.BalancingInterval, "balancingInterval", 5*time.Minute, "Interval for running balancing checks")
+	flag.BoolVar(&conf.EnableAutoPatch, "enableAutoPatch", true, "Automatically apply pending maintenance during each instance's maintenance window")
 
 	flag.UintVar(&conf.ServerPort, "serverPort", 8041, "Port for the ui server")
 
@@ -75,11 +76,13 @@ func main() {
 		Str("ReaderInstanceClasses", conf.ReaderInstanceClasses).
 		Bool("EnableBalancing", conf.EnableBalancing).
 		Dur("BalancingInterval", conf.BalancingInterval).
+		Bool("EnableAutoPatch", conf.EnableAutoPatch).
 		Msg("Starting RDS Predictive Scaler with configuration")
 
 	// Create and start the API server
 	apiServer := api.New(conf, logger, broadcast)
 	apiServer.OnClientConnect(initialBroadcasts(rdsScaler))
+	apiServer.OnPatchAction(rdsScaler.StartPatchMode, rdsScaler.StopPatchMode)
 
 	go func() {
 		err = apiServer.Serve(conf.ServerPort)
@@ -148,6 +151,7 @@ func initialBroadcasts(rdsScaler *scaler.Scaler) func() []types.Broadcast {
 	return func() []types.Broadcast {
 		var broadcasts []types.Broadcast
 		broadcasts = append(broadcasts, types.Broadcast{MessageType: "config", Data: conf})
+		broadcasts = append(broadcasts, types.Broadcast{MessageType: "patchStatus", Data: rdsScaler.GetPatchStatus()})
 
 		clusterStatusHistory := rdsScaler.GetClusterStatusHistory(24 * time.Hour)
 		if clusterStatusHistory != nil {
