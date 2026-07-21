@@ -28,12 +28,7 @@ const theme = createTheme({
 });
 
 function App() {
-    const socketUrl =
-        'ws://' +
-        (process.env.NODE_ENV === 'development'
-            ? 'localhost:8041/'
-            : 'localhost:8001/api/v1/namespaces/kube-system/services/http:rds-predictive-scaler:http/proxy/') +
-        'ws';
+    const socketUrl = `ws://${window.location.hostname}:${window.location.port}/ws`;
 
     const {lastMessage, readyState, sendMessage} = useWebSocket(socketUrl, {
         onOpen: () => {
