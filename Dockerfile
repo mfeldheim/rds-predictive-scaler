@@ -2,7 +2,7 @@ FROM node:22.21.1-alpine3.21 AS ui_builder
 ARG NODE_ENV=production
 ENV NODE_ENV=$NODE_ENV
 WORKDIR /ui
-COPY ui/package.json ui/package-lock.json ./
+COPY ui/package.json ./
 RUN npm install --include=dev
 COPY ui .
 RUN npm run build
