@@ -28,7 +28,7 @@ const theme = createTheme({
 });
 
 function App() {
-    const socketUrl = `ws://${window.location.hostname}:${window.location.port}/ws`;
+    const socketUrl = `ws://${window.location.host}${window.location.pathname.replace(/\/$/, '')}/ws`;
 
     const {lastMessage, readyState, sendMessage} = useWebSocket(socketUrl, {
         onOpen: () => {
