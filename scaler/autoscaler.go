@@ -25,6 +25,7 @@ type Scaler struct {
 	patchStatus types.PatchStatus
 	patchMu     sync.Mutex
 	patchStopCh chan struct{}
+	patchDone   chan struct{} // Signal to resume scaling after patch completes
 }
 
 func New(conf *types.Config, logger *zerolog.Logger, awsSession *session.Session, broadcast chan types.Broadcast) (*Scaler, error) {
@@ -41,6 +42,7 @@ func New(conf *types.Config, logger *zerolog.Logger, awsSession *session.Session
 		metrics:      cloudwatchMetrics,
 		logger:       logger,
 		broadcast:    broadcast,
+		patchDone:    make(chan struct{}, 1),
 	}, nil
 }
 
@@ -65,7 +67,10 @@ func (s *Scaler) Run() {
 				s.logger.Debug().Msg("Patch mode active, skipping auto-scale cycle")
 				continue
 			}
+			s.scals.patchDone:
+			s.logger.Info().Msg("Patch completed, resuming scaling immediately")
 			s.scale(boostHours)
+		case <-e(boostHours)
 		case <-patchCheckTicker.C:
 			s.CheckAndAutoApplyPatches()
 		}

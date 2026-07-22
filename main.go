@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -78,6 +79,16 @@ func main() {
 		Dur("BalancingInterval", conf.BalancingInterval).
 		Bool("EnableAutoPatch", conf.EnableAutoPatch).
 		Msg("Starting RDS Predictive Scaler with configuration")
+
+	// Restore patch state from ConfigMap if available (handles spot termination recovery)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := rdsScaler.InitPatchStateFromConfigMap(ctx); err != nil {
+		logger.Warn().Err(err).Msg("Failed to restore patch state from ConfigMap (non-fatal)")
+	}
+	cancel()
+
+	// Start persistence background task
+	go rdsScaler.StartPersistenceTicker()
 
 	// Create and start the API server
 	apiServer := api.New(conf, logger, broadcast)

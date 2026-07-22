@@ -285,6 +285,13 @@ func (s *Scaler) runPatchMode(instances []types.PatchInstanceInfo, stopCh chan s
 		}
 		s.patchMu.Unlock()
 		s.broadcastPatchStatus()
+		
+		// Signal to resume scaling immediately
+		select {
+		case s.patchDone <- struct{}{}:
+		default:
+		}
+		
 		s.logger.Info().Msg("Patch mode completed")
 	}()
 
@@ -390,6 +397,16 @@ func (s *Scaler) patchInstance(info types.PatchInstanceInfo, stopCh chan struct{
 	if err := s.waitForInstancesAvailable([]string{info.Identifier}); err != nil {
 		_ = s.deleteTempReader(tempName)
 		return fmt.Errorf("patched instance never became available: %v", err)
+	}
+
+	// --- Step 4b: if we patched the writer, failover back before deleting temp ---
+	if info.IsWriter {
+		s.logger.Info().Str("target", info.Identifier).Msg("Patch mode: failing back to patched writer instance")
+		if err := s.failoverToInstance(info.Identifier); err != nil {
+			s.logger.Warn().Err(err).Str("instance", info.Identifier).Msg("Patch mode: failover back to writer failed, proceeding with temp reader cleanup")
+		} else {
+			s.logger.Info().Msg("Patch mode: failover back to writer completed successfully")
+		}
 	}
 
 	// --- Step 5: remove temp reader ---

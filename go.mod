@@ -7,6 +7,8 @@ require (
 	github.com/gorilla/mux v1.8.0
 	github.com/gorilla/websocket v1.5.0
 	github.com/rs/zerolog v1.30.0
+	k8s.io/api v0.28.0
+	k8s.io/client-go v0.28.0
 )
 
 require (
