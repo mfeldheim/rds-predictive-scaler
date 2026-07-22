@@ -20,11 +20,66 @@ import PatchModePanel from "./components/PatchModePanel.tsx";
 
 const theme = createTheme({
     palette: {
-        mode: 'dark', // Set the theme to dark mode
+        mode: 'dark',
+        background: {
+            default: '#05080f',
+            paper: 'rgba(255, 255, 255, 0.02)',
+        },
+        primary: {
+            main: '#60a5fa',
+        },
+        secondary: {
+            main: '#34d399',
+        },
+        divider: 'rgba(255, 255, 255, 0.06)',
+        text: {
+            primary: 'rgba(255, 255, 255, 0.92)',
+            secondary: 'rgba(255, 255, 255, 0.56)',
+        },
+    },
+    shape: {
+        borderRadius: 16,
     },
     typography: {
-        fontFamily: '"Public Sans", sans-serif',
-    }
+        fontFamily: '"Inter", "Public Sans", sans-serif',
+        h6: {
+            fontWeight: 700,
+            letterSpacing: '-0.01em',
+        },
+    },
+    components: {
+        MuiCssBaseline: {
+            styleOverrides: {
+                body: {
+                    backgroundColor: 'transparent',
+                },
+            },
+        },
+        MuiAppBar: {
+            styleOverrides: {
+                root: {
+                    backgroundColor: 'rgba(5, 8, 15, 0.72)',
+                    backdropFilter: 'blur(16px)',
+                    WebkitBackdropFilter: 'blur(16px)',
+                    borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+                    boxShadow: 'none',
+                },
+            },
+        },
+        MuiPaper: {
+            styleOverrides: {
+                root: {
+                    backgroundColor: 'rgba(255, 255, 255, 0.02)',
+                    backgroundImage: 'linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0))',
+                    border: '1px solid rgba(255, 255, 255, 0.06)',
+                    backdropFilter: 'blur(20px)',
+                    WebkitBackdropFilter: 'blur(20px)',
+                    boxShadow: '0 1px 0 0 rgba(255,255,255,0.04) inset, 0 24px 48px -24px rgba(0,0,0,0.6)',
+                    transition: 'transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease',
+                },
+            },
+        },
+    },
 });
 
 function App() {
@@ -114,19 +169,31 @@ function App() {
                                     src="/logo_transparent.png"
                                     alt="Logo"
                                     sx={{
-                                        height: 40,
+                                        height: 36,
                                         width: 'auto',
+                                        filter: 'drop-shadow(0 0 12px rgba(96,165,250,0.35))',
                                     }}
                                 />
                                 <Typography
                                     component="h1"
                                     variant="h6"
-                                    color="inherit"
                                     noWrap
-                                    sx={{fontWeight: 600}}
+                                    className="gradient-text"
+                                    sx={{fontWeight: 800, letterSpacing: '-0.01em'}}
                                 >
                                     RDS Predictive Scaler
                                 </Typography>
+                                <Box
+                                    className="pulse-dot"
+                                    sx={{
+                                        width: 8,
+                                        height: 8,
+                                        borderRadius: '50%',
+                                        backgroundColor: '#34d399',
+                                        boxShadow: '0 0 0 4px rgba(52,211,153,0.15)',
+                                        ml: 0.5,
+                                    }}
+                                />
                             </Box>
                             <IconButton color="inherit">
                                 <Badge badgeContent={4} color="secondary">
@@ -134,15 +201,13 @@ function App() {
                                 </Badge>
                             </IconButton>
                         </Toolbar>
+                        <Box className="gradient-divider"/>
                     </AppBar>
 
                     <Box
                         component="main"
                         sx={{
-                            backgroundColor: (theme) =>
-                                theme.palette.mode === 'light'
-                                    ? theme.palette.grey[100]
-                                    : theme.palette.grey[900],
+                            backgroundColor: 'transparent',
                             flexGrow: 1,
                             height: '100vh',
                             overflow: 'auto',
@@ -150,26 +215,41 @@ function App() {
                         }}
                     >
                         <Toolbar/>
-                        <Container sx={{width: '100%'}}>
+                        <Container sx={{width: '100%', maxWidth: '1400px !important', py: 4}}>
                             <Grid container spacing={3} sx={{width: '100%'}}>
-                                <Grid item xs={6}>
+                                <Grid item xs={12} md={6}>
                                     <Paper
+                                        className="fade-up"
                                         sx={{
-                                            p: 2,
+                                            p: 2.5,
                                             display: 'flex',
                                             flexDirection: 'column',
+                                            height: '100%',
+                                            '&:hover': {
+                                                transform: 'translateY(-2px)',
+                                                borderColor: 'rgba(96, 165, 250, 0.25)',
+                                                boxShadow: '0 1px 0 0 rgba(255,255,255,0.05) inset, 0 28px 56px -24px rgba(0,0,0,0.7), 0 0 0 1px rgba(96,165,250,0.08)',
+                                            },
                                         }}
                                     >
                                         <CurrentLoad status={clusterStatus} prediction={clusterStatusPrediction}/>
                                     </Paper>
                                 </Grid>
 
-                                <Grid item xs={6}>
+                                <Grid item xs={12} md={6}>
                                     <Paper
+                                        className="fade-up"
                                         sx={{
-                                            p: 2,
+                                            p: 2.5,
                                             display: 'flex',
                                             flexDirection: 'column',
+                                            height: '100%',
+                                            animationDelay: '0.05s',
+                                            '&:hover': {
+                                                transform: 'translateY(-2px)',
+                                                borderColor: 'rgba(52, 211, 153, 0.25)',
+                                                boxShadow: '0 1px 0 0 rgba(255,255,255,0.05) inset, 0 28px 56px -24px rgba(0,0,0,0.7), 0 0 0 1px rgba(52,211,153,0.08)',
+                                            },
                                         }}
                                     >
                                         <CurrentSize status={clusterStatus} prediction={clusterStatusPrediction}
@@ -178,7 +258,7 @@ function App() {
                                 </Grid>
 
                                 <Grid item xs={12}>
-                                    <Paper sx={{p: 2, display: 'flex', flexDirection: 'column'}}>
+                                    <Paper className="fade-up" sx={{p: 2.5, display: 'flex', flexDirection: 'column', animationDelay: '0.1s'}}>
                                         <GraphUtilization historyData={aggregatedHistory}
                                                           predictionData={aggregatedPredictionHistory}
                                                           targetCpuUtilization={config?.target_cpu_util}/>
@@ -186,12 +266,12 @@ function App() {
                                     </Paper>
                                 </Grid>
 
-                                <Grid item xs={12}>
+                                <Grid item xs={12} className="fade-up" sx={{animationDelay: '0.15s'}}>
                                     <ClusterMap clusterStatus={clusterStatus}/>
                                 </Grid>
 
                                 <Grid item xs={12}>
-                                    <Paper sx={{p: 2, display: 'flex', flexDirection: 'column'}}>
+                                    <Paper className="fade-up" sx={{p: 2.5, display: 'flex', flexDirection: 'column', animationDelay: '0.2s'}}>
                                         <PatchModePanel
                                             patchStatus={patchStatus}
                                             autoPatchEnabled={config?.enable_auto_patch ?? true}
