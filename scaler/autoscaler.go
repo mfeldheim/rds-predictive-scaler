@@ -67,10 +67,10 @@ func (s *Scaler) Run() {
 				s.logger.Debug().Msg("Patch mode active, skipping auto-scale cycle")
 				continue
 			}
-			s.scals.patchDone:
+			s.scale(boostHours)
+		case <-s.patchDone:
 			s.logger.Info().Msg("Patch completed, resuming scaling immediately")
 			s.scale(boostHours)
-		case <-e(boostHours)
 		case <-patchCheckTicker.C:
 			s.CheckAndAutoApplyPatches()
 		}

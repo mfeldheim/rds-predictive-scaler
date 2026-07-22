@@ -86,7 +86,7 @@ func (s *Scaler) InitPatchStateFromConfigMap(ctx context.Context) error {
 			}
 			s.patchMu.Unlock()
 			s.broadcastPatchStatus()
-			s.savePatchStateToConfigMap(context.Background())
+			s.SavePatchStateToConfigMap(context.Background())
 			
 			// Signal to resume scaling immediately
 			select {
@@ -176,7 +176,7 @@ func (s *Scaler) StartPersistenceTicker() {
 			if s.patchStatus.Active {
 				s.patchMu.Unlock()
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				_ = s.savePatchStateToConfigMap(ctx)
+			_ = s.SavePatchStateToConfigMap(ctx)
 				cancel()
 			} else {
 				s.patchMu.Unlock()
@@ -220,7 +220,7 @@ func (s *Scaler) ResumePatchMode(instances []types.PatchInstanceInfo, completed 
 
 		// Persist state after each instance is patched
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = s.savePatchStateToConfigMap(ctx)
+		_ = s.SavePatchStateToConfigMap(ctx)
 		cancel()
 	}
 }
