@@ -339,7 +339,8 @@ func (s *Scaler) failoverToInstance(targetInstanceId string) error {
 			continue
 		}
 
-		if aws.StringValue(currentWriter.DBInstanceIdentifier) == targetInstanceId {
+		// Compare with case-insensitive matching (RDS returns lowercase, but input may be mixed case)
+		if strings.EqualFold(aws.StringValue(currentWriter.DBInstanceIdentifier), targetInstanceId) {
 			s.logger.Info().
 				Str("NewWriter", targetInstanceId).
 				Msg("Failover completed successfully")
